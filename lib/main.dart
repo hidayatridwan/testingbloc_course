@@ -1,16 +1,22 @@
-import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'dart:developer' as devtools show log;
-
-import 'bloc/bloc_actions.dart';
-import 'bloc/person.dart';
-import 'bloc/persons_bloc.dart';
-
-extension Log on Object {
-  void log() => devtools.log(toString());
-}
+import 'bloc/actions.dart';
+import 'dialogs/generic_dialog.dart';
+import 'models.dart';
+import 'views/iterable_list_view.dart';
+import 'views/login_view.dart';
+import 'dialogs/loading_screen.dart';
+import 'apis/login_api.dart';
+import 'apis/notes_api.dart';
+import 'bloc/app_state.dart';
+import 'strings.dart'
+    show
+        homePage,
+        loginErrorDialogContent,
+        loginErrorDialogTitle,
+        ok,
+        pleaseWait;
+import 'bloc/app_bloc.dart';
 
 void main() {
   runApp(const MyApp());
@@ -22,23 +28,14 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: BlocProvider(
-        create: (_) => PersonBloc(),
-        child: const HomePage(),
+      title: 'Flutter Bloc',
+      theme: ThemeData(
+        primarySwatch: Colors.deepOrange,
       ),
+      debugShowCheckedModeBanner: false,
+      home: const HomePage(),
     );
   }
-}
-
-Future<Iterable<Person>> getPersons(String url) => HttpClient()
-    .getUrl(Uri.parse(url))
-    .then((req) => req.close())
-    .then((res) => res.transform(utf8.decoder).join())
-    .then((str) => json.decode(str) as List<dynamic>)
-    .then((list) => list.map((e) => Person.fromJson(e)));
-
-extension Subsript<T> on Iterable<T> {
-  T? operator [](int index) => length > index ? elementAt(index) : null;
 }
 
 class HomePage extends StatelessWidget {
@@ -46,52 +43,62 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return BlocProvider(
+      create: (context) => AppBloc(
+        loginApi: LoginApi(),
+        notesApi: NotesApi(),
+      ),
+      child: Scaffold(
         appBar: AppBar(
-          title: const Text('Home Page'),
+          title: const Text(homePage),
         ),
-        body: Column(
-          children: [
-            Row(
-              children: [
-                TextButton(
-                    onPressed: () {
-                      context.read<PersonBloc>().add(const LoadPersonAction(
-                          url: persons1Url, loader: getPersons));
-                    },
-                    child: const Text('Load json #1')),
-                TextButton(
-                    onPressed: () {
-                      context.read<PersonBloc>().add(const LoadPersonAction(
-                          url: persons2Url, loader: getPersons));
-                    },
-                    child: const Text('Load json #2'))
-              ],
-            ),
-            BlocBuilder<PersonBloc, FetchResult?>(
-              buildWhen: (previousResult, currentResult) {
-                return previousResult?.persons != currentResult?.persons;
-              },
-              builder: (context, fetchResult) {
-                fetchResult?.log();
-                final persons = fetchResult?.persons;
-                if (persons == null) {
-                  return const SizedBox();
-                }
-                return Expanded(
-                  child: ListView.builder(
-                    itemCount: persons.length,
-                    itemBuilder: (context, index) {
-                      final person = persons[index]!;
-                      return ListTile(
-                        title: Text(person.name),
+        body: BlocConsumer<AppBloc, AppState>(
+          listener: (context, appState) {
+            // loading screen
+            if (appState.isLoading) {
+              LoadingScreen.instance().show(
+                context: context,
+                text: pleaseWait,
+              );
+            } else {
+              LoadingScreen.instance().hide();
+            }
+
+            //  display possible errors
+            final loginError = appState.loginErrors;
+            if (loginError != null) {
+              showGenericDialog<bool>(
+                context: context,
+                title: loginErrorDialogTitle,
+                content: loginErrorDialogContent,
+                optionsBuilder: () => {ok: true},
+              );
+            }
+
+            //  if we are logged in, but we have no fetched notes, fetch then now
+            if (appState.isLoading == false &&
+                appState.loginErrors == null &&
+                appState.loginHandle == const LoginHandle.fooBar() &&
+                appState.fetchedNotes == null) {
+              context.read<AppBloc>().add(const LoadNotesAction());
+            }
+          },
+          builder: (context, appState) {
+            final notes = appState.fetchedNotes;
+            if (notes == null) {
+              return LoginView(
+                onLoginTapped: (email, password) {
+                  context.read<AppBloc>().add(
+                        LoginAction(email: email, password: password),
                       );
-                    },
-                  ),
-                );
-              },
-            )
-          ],
-        ));
+                },
+              );
+            } else {
+              return notes.toListView();
+            }
+          },
+        ),
+      ),
+    );
   }
 }
